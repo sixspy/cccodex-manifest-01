@@ -12,11 +12,14 @@ from app.db import init_db
 from app.services import (
     close_batch,
     get_batch,
+    get_current_rule,
     list_batches,
     list_objects,
     list_reports,
+    list_rules,
     register_object,
     run_visibility,
+    switch_rule,
 )
 from app.services.objects import ServiceError
 
@@ -107,17 +110,53 @@ async def api_logout() -> Response:
 @get("/api/meta")
 async def api_meta(request: Request) -> dict:
     require_user(request)
+    rule = get_current_rule()
     return {
         "lab_name": Config.LAB_NAME,
         "product_line": "cc-manifest-lab",
         "chain": ["落地批次", "对象登记", "清单闭合", "可见性对账"],
+        "current_rule": rule,
     }
+
+
+@get("/api/rule-tracks")
+async def api_rule_tracks(request: Request) -> dict:
+    require_user(request)
+    return {"current": get_current_rule(), "items": list_rules()}
+
+
+@post("/api/rule-tracks/switch")
+async def api_switch_rule(request: Request) -> Response:
+    require_user(request)
+    body = await request.json()
+    expected = body.get("expected_track_no")
+    try:
+        expected_no = int(expected) if expected is not None else None
+    except (TypeError, ValueError):
+        return Response(
+            content={"ok": False, "error": "期望轨号必须是整数"},
+            status_code=400,
+            media_type="application/json",
+        )
+    try:
+        rule = switch_rule(body, expected_track_no=expected_no)
+    except ServiceError as exc:
+        return Response(
+            content={"ok": False, "error": exc.message},
+            status_code=exc.status_code,
+            media_type="application/json",
+        )
+    return Response(
+        content={"ok": True, "rule": rule},
+        status_code=200,
+        media_type="application/json",
+    )
 
 
 @get("/api/batches")
 async def api_batches(request: Request, status: str | None = None) -> dict:
     require_user(request)
-    return {"items": list_batches(status=status)}
+    return {"items": list_batches(status=status), "current_rule": get_current_rule()}
 
 
 @get("/api/batches/{batch_id:int}")
@@ -126,19 +165,33 @@ async def api_batch_detail(request: Request, batch_id: int) -> dict:
     batch = get_batch(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="批次不存在")
-    return {"batch": batch, "objects": list_objects(batch_id)}
+    return {
+        "batch": batch,
+        "objects": list_objects(batch_id),
+        "current_rule": get_current_rule(),
+    }
 
 
 @post("/api/batches/{batch_id:int}/objects")
 async def api_register(request: Request, batch_id: int) -> Response:
     require_user(request)
     body = await request.json()
+    raw_track = body.get("rule_track_no")
+    try:
+        rule_track_no = int(raw_track) if raw_track is not None else None
+    except (TypeError, ValueError):
+        return Response(
+            content={"ok": False, "error": "规则轨号必须是整数"},
+            status_code=400,
+            media_type="application/json",
+        )
     try:
         obj = register_object(
             batch_id,
             str(body.get("object_key", "")),
             str(body.get("content_hash", "")),
             int(body.get("byte_size", 0)),
+            rule_track_no=rule_track_no,
         )
     except ServiceError as exc:
         return Response(
@@ -197,6 +250,8 @@ app = Litestar(
         api_login,
         api_logout,
         api_meta,
+        api_rule_tracks,
+        api_switch_rule,
         api_batches,
         api_batch_detail,
         api_register,

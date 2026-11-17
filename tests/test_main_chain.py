@@ -9,15 +9,18 @@ def test_register_close_visibility_chain(authed):
             "object_key": "raw/a.parquet",
             "content_hash": "abc123",
             "byte_size": 10,
+            "rule_track_no": 1,
         },
     )
     assert r1.status_code == 200
+    assert r1.json()["object"]["rule_track_no"] == 1
     r2 = authed.post(
         f"/api/batches/{bid}/objects",
         json={
             "object_key": "raw/b.parquet",
             "content_hash": "def456",
             "byte_size": 20,
+            "rule_track_no": 1,
         },
     )
     assert r2.status_code == 200
